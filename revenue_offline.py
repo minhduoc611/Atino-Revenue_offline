@@ -220,7 +220,7 @@ def main():
         return
     
     today = datetime.now()
-    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 3)]
+    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 11)]
         
     success_count = 0
     fail_count = 0
