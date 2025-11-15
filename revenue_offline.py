@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import os
 
 PROJECT_ID = "atino-vietnam"
-DATASET_ID = "created_tables"
-TABLE_ID = "offline_revenue_view"
+DATASET_ID = "P_and_L"
+TABLE_ID = "Bills_revenue"
 
 LARK_CONFIG = {
     "app_id": os.getenv("LARK_APP_ID", "cli_a8620f964a38d02f"),
