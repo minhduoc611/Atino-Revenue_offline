@@ -25,9 +25,9 @@ def connect_bigquery():
 
 def get_revenue_data(client, target_date):
     query = f"""
-    SELECT depotId, depot_name, type, total_money, total_returnfee
+    SELECT depotId, type, total_money, total_returnfee
     FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}` 
-    WHERE date = "{target_date}"
+    WHERE date = "{target_date}" and mode = "2"
     """
     try:
         return client.query(query).to_dataframe()
@@ -40,14 +40,14 @@ def calculate_daily_revenue(df):
     df['total_money'] = pd.to_numeric(df['total_money'], errors='coerce').fillna(0)
     df['total_returnfee'] = pd.to_numeric(df['total_returnfee'], errors='coerce').fillna(0)
     
-    type1_df = df[df['type'] == 1][['depotId', 'depot_name', 'total_money', 'total_returnfee']].copy()
-    type1_df.columns = ['depotId', 'depot_name', 'money_type1', 'returnfee_type1']
+    type1_df = df[df['type'] == 1][['depotId', 'total_money', 'total_returnfee']].copy()
+    type1_df.columns = ['depotId', 'money_type1', 'returnfee_type1']
     
-    type2_df = df[df['type'] == 2][['depotId', 'depot_name', 'total_money', 'total_returnfee']].copy()
-    type2_df.columns = ['depotId', 'depot_name', 'money_type2', 'returnfee_type2']
+    type2_df = df[df['type'] == 2][['depotId', 'total_money', 'total_returnfee']].copy()
+    type2_df.columns = ['depotId', 'money_type2', 'returnfee_type2']
     
     result_df = pd.merge(
-        type2_df[['depotId', 'depot_name', 'money_type2']], 
+        type2_df[['depotId', 'money_type2']], 
         type1_df[['depotId', 'money_type1', 'returnfee_type1']], 
         on='depotId', 
         how='outer'
@@ -181,7 +181,6 @@ def upsert_data_for_date(base_token, table_id, access_token, df, target_date):
         fields = {
             "Ngày": timestamp,
             "Mã cửa hàng": depot_id,
-            "Tên cửa hàng": str(row['depot_name']),
             "Doanh thu Type 1": int(row['money_type1']),
             "Doanh thu Type 2": int(row['money_type2']),
             "Phí hoàn trả Type 1": int(row['returnfee_type1']),
