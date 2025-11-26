@@ -2,7 +2,7 @@ name: Sync Revenue to Lark Base
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 19 * * *'
   workflow_dispatch:  
 
 jobs:
