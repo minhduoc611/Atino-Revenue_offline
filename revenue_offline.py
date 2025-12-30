@@ -2,7 +2,6 @@ from google.cloud import bigquery
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
-
 import os
 
 PROJECT_ID = "atino-vietnam"
@@ -24,11 +23,55 @@ def connect_bigquery():
         return None
 
 def get_revenue_data(client, target_date):
+    """Query dữ liệu với logic CTE mới"""
     query = f"""
-    SELECT depotId, type, total_money, total_returnfee
-    FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}` 
-    WHERE date = "{target_date}" and mode = "2"
+    WITH CTE AS (
+      SELECT 
+        CASE
+          WHEN b.mode = '1' AND b.depotid IN (
+            "142681", "209838", "94204", "218273", "209951", "79564", "214102", "197220", 
+            "52449", "6526", "216457", "217598", "218022", "204337", "54227", "210003", 
+            "216868", "210175", "207514", "170506", "9538", "177163", "170505", "213201", 
+            "213200", "218047", "169822", "222250"
+          ) THEN "88888888"  -- Facebook orders
+          WHEN b.mode = '1' AND b.depotid = "128940" THEN "102701"  -- Tiktok livestream to Atino Tiktok
+          ELSE b.depotid
+        END AS depotid,
+        b.date,
+        b.type,
+        b.mode,
+        CASE 
+          WHEN ROW_NUMBER() OVER(PARTITION BY b.id ORDER BY i.id) = 1
+          THEN b.money
+        END AS money,
+        CASE 
+          WHEN ROW_NUMBER() OVER(PARTITION BY b.id ORDER BY i.id) = 1
+          THEN b.returnFee
+        END AS returnFee,
+        i.avgCost,
+        i.quantity,
+        i.avgCost * i.quantity AS total_cost
+      FROM `{PROJECT_ID}.nhanhVN.FACT_bills` AS b
+      LEFT JOIN `{PROJECT_ID}.nhanhVN.FACT_imexs` AS i
+        ON b.id = i.billid
+      WHERE b.date = "{target_date}"
+    )
+    SELECT 
+      depotid,
+      date,
+      type,
+      mode,
+      SUM(money) AS total_money,
+      SUM(returnFee) AS total_returnFee,
+      SUM(total_cost) AS total_cost
+    FROM CTE
+    GROUP BY 
+      depotid,
+      date,
+      type,
+      mode
     """
+    
     try:
         return client.query(query).to_dataframe()
     except Exception as e:
@@ -36,30 +79,43 @@ def get_revenue_data(client, target_date):
         return None
 
 def calculate_daily_revenue(df):
-    df['type'] = df['type'].astype(int)
-    df['total_money'] = pd.to_numeric(df['total_money'], errors='coerce').fillna(0)
-    df['total_returnfee'] = pd.to_numeric(df['total_returnfee'], errors='coerce').fillna(0)
+    """Tính doanh thu theo depotId, chỉ lấy mode = '2'"""
+    # Filter mode = '2' (tương tự logic cũ)
+    df_filtered = df[df['mode'] == '2'].copy()
     
-    type1_df = df[df['type'] == 1][['depotId', 'total_money', 'total_returnfee']].copy()
+    if df_filtered.empty:
+        return pd.DataFrame(columns=['depotId', 'money_type1', 'money_type2', 
+                                     'returnfee_type1', 'total_cost', 'daily_revenue'])
+    
+    df_filtered['type'] = df_filtered['type'].astype(int)
+    df_filtered['total_money'] = pd.to_numeric(df_filtered['total_money'], errors='coerce').fillna(0)
+    df_filtered['total_returnfee'] = pd.to_numeric(df_filtered['total_returnfee'], errors='coerce').fillna(0)
+    df_filtered['total_cost'] = pd.to_numeric(df_filtered['total_cost'], errors='coerce').fillna(0)
+    
+    # Tách type 1 và type 2
+    type1_df = df_filtered[df_filtered['type'] == 1][['depotid', 'total_money', 'total_returnfee']].copy()
     type1_df.columns = ['depotId', 'money_type1', 'returnfee_type1']
     
-    type2_df = df[df['type'] == 2][['depotId', 'total_money', 'total_returnfee']].copy()
-    type2_df.columns = ['depotId', 'money_type2', 'returnfee_type2']
+    type2_df = df_filtered[df_filtered['type'] == 2][['depotid', 'total_money', 'total_returnfee', 'total_cost']].copy()
+    type2_df.columns = ['depotId', 'money_type2', 'returnfee_type2', 'total_cost']
     
+    # Merge hai loại
     result_df = pd.merge(
-        type2_df[['depotId', 'money_type2']], 
-        type1_df[['depotId', 'money_type1', 'returnfee_type1']], 
-        on='depotId', 
+        type2_df[['depotId', 'money_type2', 'total_cost']],
+        type1_df[['depotId', 'money_type1', 'returnfee_type1']],
+        on='depotId',
         how='outer'
     ).fillna(0)
     
+    # Tính doanh thu
     result_df['daily_revenue'] = (
         result_df['money_type2'] - 
         result_df['money_type1'] + 
         result_df['returnfee_type1']
     )
     
-    for col in ['daily_revenue', 'money_type1', 'money_type2', 'returnfee_type1']:
+    # Làm tròn các cột số
+    for col in ['daily_revenue', 'money_type1', 'money_type2', 'returnfee_type1', 'total_cost']:
         result_df[col] = result_df[col].round(0).astype(int)
     
     return result_df
@@ -113,6 +169,7 @@ def get_existing_records(base_token, table_id, access_token, target_date):
                     record_dict[depot_id] = record_id
         
         return record_dict
+    
     except Exception as e:
         print(f"Lỗi lấy records: {e}")
         return {}
@@ -120,17 +177,18 @@ def get_existing_records(base_token, table_id, access_token, target_date):
 def update_lark_records(base_token, table_id, access_token, records_to_update):
     if not records_to_update:
         return 0
-        
+    
     url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records/batch_update"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    
     total_updated = 0
+    
     for i in range(0, len(records_to_update), 500):
         batch = records_to_update[i:i+500]
         try:
             response = requests.post(url, json={"records": batch}, headers=headers)
             response.raise_for_status()
             result = response.json()
+            
             if result.get("code") == 0:
                 total_updated += len(result.get("data", {}).get("records", []))
             else:
@@ -145,17 +203,18 @@ def update_lark_records(base_token, table_id, access_token, records_to_update):
 def create_lark_records(base_token, table_id, access_token, records_to_create):
     if not records_to_create:
         return 0
-        
+    
     url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records/batch_create"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    
     total_created = 0
+    
     for i in range(0, len(records_to_create), 500):
         batch = records_to_create[i:i+500]
         try:
             response = requests.post(url, json={"records": batch}, headers=headers)
             response.raise_for_status()
             result = response.json()
+            
             if result.get("code") == 0:
                 total_created += len(result.get("data", {}).get("records", []))
             else:
@@ -184,6 +243,7 @@ def upsert_data_for_date(base_token, table_id, access_token, df, target_date):
             "Doanh thu Type 1": int(row['money_type1']),
             "Doanh thu Type 2": int(row['money_type2']),
             "Phí hoàn trả Type 1": int(row['returnfee_type1']),
+            "Chi phí": int(row['total_cost']),  # Thêm trường chi phí
             "Doanh thu": int(row['daily_revenue'])
         }
         
@@ -207,7 +267,7 @@ def upsert_data_for_date(base_token, table_id, access_token, df, target_date):
     return (updated_count + created_count) > 0
 
 def main():
-    print("\nBắt đầu cập nhật 3 ngày gần nhất\n")
+    print("\nBắt đầu cập nhật 2 ngày gần nhất\n")
     
     client = connect_bigquery()
     if not client:
@@ -220,7 +280,7 @@ def main():
     
     today = datetime.now()
     dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(0, 2)]
-        
+    
     success_count = 0
     fail_count = 0
     
@@ -229,9 +289,16 @@ def main():
         
         if df is None or df.empty:
             print(f"{target_date}: Không có dữ liệu\n")
+            fail_count += 1
             continue
         
         result_df = calculate_daily_revenue(df)
+        
+        if result_df.empty:
+            print(f"{target_date}: Không có dữ liệu mode=2\n")
+            fail_count += 1
+            continue
+        
         success = upsert_data_for_date(
             LARK_CONFIG['base_token'],
             LARK_CONFIG['table_id'],
@@ -242,7 +309,8 @@ def main():
         
         if success:
             success_count += 1
-            print(f"  Tổng doanh thu: {result_df['daily_revenue'].sum():,} VNĐ\n")
+            print(f"  Tổng doanh thu: {result_df['daily_revenue'].sum():,} VNĐ")
+            print(f"  Tổng chi phí: {result_df['total_cost'].sum():,} VNĐ\n")
         else:
             fail_count += 1
     
