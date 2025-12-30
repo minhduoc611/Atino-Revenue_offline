@@ -249,7 +249,6 @@ def upsert_data_for_date(base_token, table_id, access_token, df, target_date):
             "Doanh thu Type 1": int(row['money_type1']),
             "Doanh thu Type 2": int(row['money_type2']),
             "Phí hoàn trả Type 1": int(row['returnfee_type1']),
-            "Chi phí": int(row['total_cost']),
             "Doanh thu": int(row['daily_revenue'])
         }
         
