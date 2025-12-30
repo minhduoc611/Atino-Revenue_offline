@@ -33,8 +33,8 @@ def get_revenue_data(client, target_date):
             "52449", "6526", "216457", "217598", "218022", "204337", "54227", "210003", 
             "216868", "210175", "207514", "170506", "9538", "177163", "170505", "213201", 
             "213200", "218047", "169822", "222250"
-          ) THEN "88888888"  -- Facebook orders
-          WHEN b.mode = '1' AND b.depotid = "128940" THEN "102701"  -- Tiktok livestream to Atino Tiktok
+          ) THEN "88888888"
+          WHEN b.mode = '1' AND b.depotid = "128940" THEN "102701"
           ELSE b.depotid
         END AS depotid,
         b.date,
@@ -50,7 +50,7 @@ def get_revenue_data(client, target_date):
         END AS returnFee,
         i.avgCost,
         i.quantity,
-        i.avgCost * i.quantity AS total_cost
+        IFNULL(i.avgCost, 0) * IFNULL(i.quantity, 0) AS total_cost
       FROM `{PROJECT_ID}.nhanhVN.FACT_bills` AS b
       LEFT JOIN `{PROJECT_ID}.nhanhVN.FACT_imexs` AS i
         ON b.id = i.billid
@@ -62,7 +62,7 @@ def get_revenue_data(client, target_date):
       type,
       mode,
       SUM(money) AS total_money,
-      SUM(returnFee) AS total_returnFee,
+      SUM(returnFee) AS total_returnfee,
       SUM(total_cost) AS total_cost
     FROM CTE
     GROUP BY 
@@ -73,20 +73,26 @@ def get_revenue_data(client, target_date):
     """
     
     try:
-        return client.query(query).to_dataframe()
+        df = client.query(query).to_dataframe()
+        print(f"  Query trả về {len(df)} dòng")
+        if not df.empty:
+            print(f"  Columns: {df.columns.tolist()}")
+        return df
     except Exception as e:
         print(f"Lỗi query ngày {target_date}: {e}")
         return None
 
 def calculate_daily_revenue(df):
     """Tính doanh thu theo depotId, chỉ lấy mode = '2'"""
-    # Filter mode = '2' (tương tự logic cũ)
+    # Filter mode = '2'
     df_filtered = df[df['mode'] == '2'].copy()
     
     if df_filtered.empty:
+        print("  Không có dữ liệu với mode = '2'")
         return pd.DataFrame(columns=['depotId', 'money_type1', 'money_type2', 
                                      'returnfee_type1', 'total_cost', 'daily_revenue'])
     
+    # Convert data types
     df_filtered['type'] = df_filtered['type'].astype(int)
     df_filtered['total_money'] = pd.to_numeric(df_filtered['total_money'], errors='coerce').fillna(0)
     df_filtered['total_returnfee'] = pd.to_numeric(df_filtered['total_returnfee'], errors='coerce').fillna(0)
@@ -243,7 +249,7 @@ def upsert_data_for_date(base_token, table_id, access_token, df, target_date):
             "Doanh thu Type 1": int(row['money_type1']),
             "Doanh thu Type 2": int(row['money_type2']),
             "Phí hoàn trả Type 1": int(row['returnfee_type1']),
-            "Chi phí": int(row['total_cost']),  # Thêm trường chi phí
+            "Chi phí": int(row['total_cost']),
             "Doanh thu": int(row['daily_revenue'])
         }
         
@@ -285,17 +291,21 @@ def main():
     fail_count = 0
     
     for target_date in dates:
+        print(f"\n{'='*60}")
+        print(f"Đang xử lý: {target_date}")
+        print('='*60)
+        
         df = get_revenue_data(client, target_date)
         
         if df is None or df.empty:
-            print(f"{target_date}: Không có dữ liệu\n")
+            print(f"  ❌ Không có dữ liệu\n")
             fail_count += 1
             continue
         
         result_df = calculate_daily_revenue(df)
         
         if result_df.empty:
-            print(f"{target_date}: Không có dữ liệu mode=2\n")
+            print(f"  ❌ Không có dữ liệu mode=2\n")
             fail_count += 1
             continue
         
@@ -309,18 +319,19 @@ def main():
         
         if success:
             success_count += 1
-            print(f"  Tổng doanh thu: {result_df['daily_revenue'].sum():,} VNĐ")
-            print(f"  Tổng chi phí: {result_df['total_cost'].sum():,} VNĐ\n")
+            print(f"  ✅ Tổng doanh thu: {result_df['daily_revenue'].sum():,} VNĐ")
+            print(f"  💰 Tổng chi phí: {result_df['total_cost'].sum():,} VNĐ")
         else:
             fail_count += 1
+            print(f"  ❌ Cập nhật thất bại")
     
-    print("="*60)
-    print(f"Hoàn thành: {success_count} ngày thành công", end="")
+    print("\n" + "="*60)
+    print(f"KẾT QUẢ: {success_count} ngày thành công", end="")
     if fail_count > 0:
         print(f", {fail_count} ngày thất bại")
     else:
         print()
-    print("="*60)
+    print("="*60 + "\n")
 
 if __name__ == "__main__":
     main()
